@@ -3,29 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>High-Density Image Particles</title>
+    <title>Chaos to Order: Image Reconstruction</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #050505; font-family: 'Segoe UI', sans-serif; color: white; }
         #ui-layer {
             position: absolute; top: 20px; left: 20px; width: 280px;
             background: rgba(0, 0, 0, 0.9); padding: 20px; border-radius: 12px;
-            z-index: 100; border: 1px solid #00ffcc; box-shadow: 0 0 20px rgba(0, 255, 204, 0.2);
+            z-index: 100; border: 1px solid #ff0055; box-shadow: 0 0 20px rgba(255, 0, 85, 0.2);
         }
-        h2 { margin: 0 0 10px 0; font-size: 1.1rem; color: #00ffcc; text-transform: uppercase; }
+        h2 { margin: 0 0 10px 0; font-size: 1.1rem; color: #ff0055; text-transform: uppercase; }
         button#start-btn {
-            width: 100%; padding: 12px; background: #00ffcc; border: none;
-            border-radius: 6px; color: #000; font-weight: bold; cursor: pointer;
+            width: 100%; padding: 12px; background: #ff0055; border: none;
+            border-radius: 6px; color: #fff; font-weight: bold; cursor: pointer;
             margin-bottom: 15px;
         }
         #camera-container {
             position: absolute; bottom: 20px; left: 20px; width: 180px; height: 135px;
-            border: 2px solid #00ffcc; border-radius: 8px; overflow: hidden;
+            border: 2px solid #ff0055; border-radius: 8px; overflow: hidden;
         }
         #video-feed { width: 100%; height: 100%; transform: scaleX(-1); object-fit: cover; }
         #canvas-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); }
         .hidden { display: none !important; }
         .control-group { margin-bottom: 10px; font-size: 0.8rem; }
-        input[type="range"] { width: 100%; }
+        input[type="range"] { width: 100%; accent-color: #ff0055; }
+        #status { font-weight: bold; color: #00ffcc; }
     </style>
     
     <script type="importmap">
@@ -34,6 +35,218 @@
                 "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
                 "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
             }
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <h2>Chaos to Order</h2>
+        <button id="start-btn">ENABLE CAMERA</button>
+        
+        <div id="upload-section" class="hidden">
+            <p style="font-size: 0.8rem;">Upload an image. <br><b>Open hand = Chaos. Closed fist = Image.</b></p>
+            <input type="file" id="imageLoader" accept="image/*" style="margin-bottom:15px;">
+            
+            <div class="control-group">
+                <label>Point Size (Fill Gaps)</label>
+                <input type="range" id="sizeRange" min="0.05" max="0.6" step="0.01" value="0.25">
+            </div>
+            <div class="control-group">
+                <label>Chaos Intensity</label>
+                <input type="range" id="chaosRange" min="10" max="100" step="5" value="40">
+            </div>
+        </div>
+
+        <div id="status">Waiting for Camera...</div>
+    </div>
+
+    <div id="camera-container" class="hidden">
+        <video id="video-feed" playsinline></video>
+        <canvas id="canvas-overlay"></canvas>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        let scene, camera, renderer, controls, particleSystem;
+        let handOpenFactor = 1, targetHandFactor = 1; // Start in Chaos (Open)
+        let particlesData = [];
+
+        function initThree() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 50;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        // --- IMAGE PROCESSING ---
+        document.getElementById('imageLoader').addEventListener('change', (e) => {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => processImage(img);
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(e.target.files[0]);
+        });
+
+        function processImage(img) {
+            if (particleSystem) scene.remove(particleSystem);
+            particlesData = [];
+
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const maxDim = 150; 
+            const scale = Math.min(maxDim / img.width, maxDim / img.height);
+            canvas.width = img.width * scale;
+            canvas.height = img.height * scale;
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            
+            const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            const positions = [], colors = [], targetPos = [], randomDirs = [];
+
+            for (let y = 0; y < canvas.height; y += 1) {
+                for (let x = 0; x < canvas.width; x += 1) {
+                    const i = (y * canvas.width + x) * 4;
+                    if (data[i+3] > 128) { 
+                        // The GOAL (Image position)
+                        const tx = (x - canvas.width / 2) * 0.3;
+                        const ty = (canvas.height / 2 - y) * 0.3;
+                        const tz = 0;
+
+                        // The START (Random position in space)
+                        const rx = (Math.random() - 0.5) * 100;
+                        const ry = (Math.random() - 0.5) * 100;
+                        const rz = (Math.random() - 0.5) * 100;
+
+                        positions.push(rx, ry, rz);
+                        targetPos.push(tx, ty, tz);
+                        colors.push(data[i]/255, data[i+1]/255, data[i+2]/255);
+                        
+                        // Noise profile for each particle
+                        randomDirs.push(Math.random() * Math.PI * 2);
+                    }
+                }
+            }
+
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            geo.setAttribute('target', new THREE.Float32BufferAttribute(targetPos, 3));
+            geo.setAttribute('angle', new THREE.Float32BufferAttribute(randomDirs, 1));
+
+            const mat = new THREE.PointsMaterial({
+                size: parseFloat(document.getElementById('sizeRange').value),
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.8
+            });
+
+            particleSystem = new THREE.Points(geo, mat);
+            scene.add(particleSystem);
+            document.getElementById('status').innerText = "IMAGE LOADED: CLOSE HAND TO ASSEMBLE";
+        }
+
+        // --- HAND TRACKING ---
+        document.getElementById('start-btn').addEventListener('click', () => {
+            document.getElementById('start-btn').classList.add('hidden');
+            document.getElementById('upload-section').classList.remove('hidden');
+            document.getElementById('camera-container').classList.remove('hidden');
+            initHandTracking();
+        });
+
+        function initHandTracking() {
+            const video = document.getElementById('video-feed');
+            const canvas = document.getElementById('canvas-overlay');
+            const ctx = canvas.getContext('2d');
+            const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6 });
+
+            hands.onResults(results => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    const marks = results.multiHandLandmarks[0];
+                    drawConnectors(ctx, marks, HAND_CONNECTIONS, {color: '#ff0055', lineWidth: 2});
+                    const d = Math.hypot(marks[4].x - marks[20].x, marks[4].y - marks[20].y);
+                    handOpenFactor = THREE.MathUtils.smoothstep(d, 0.08, 0.32);
+                }
+            });
+
+            const cam = new Camera(video, {
+                onFrame: async () => { 
+                    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+                    await hands.send({image: video}); 
+                }
+            });
+            cam.start();
+        }
+
+        document.getElementById('sizeRange').addEventListener('input', (e) => {
+            if (particleSystem) particleSystem.material.size = parseFloat(e.target.value);
+        });
+
+        // --- ANIMATION LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+            // Smooth the transition (Lower factor = slower, more cinematic)
+            targetHandFactor += (handOpenFactor - targetHandFactor) * 0.08;
+
+            if (particleSystem) {
+                const posArr = particleSystem.geometry.attributes.position.array;
+                const targetArr = particleSystem.geometry.attributes.target.array;
+                const angleArr = particleSystem.geometry.attributes.angle.array;
+                const time = Date.now() * 0.001;
+                const chaosScale = parseFloat(document.getElementById('chaosRange').value);
+
+                for (let i = 0; i < posArr.length; i += 3) {
+                    const tx = targetArr[i];
+                    const ty = targetArr[i+1];
+                    const tz = targetArr[i+2];
+                    const ang = angleArr[i/3];
+
+                    // Chaos state: The particle wanders around its target using its unique angle and noise
+                    // handOpenFactor = 1 (Full Chaos), handOpenFactor = 0 (Perfect Alignment)
+                    const noiseX = Math.cos(time + ang) * chaosScale * targetHandFactor;
+                    const noiseY = Math.sin(time * 0.8 + ang) * chaosScale * targetHandFactor;
+                    const noiseZ = Math.sin(time * 1.2 + ang) * chaosScale * targetHandFactor;
+
+                    // LERP (Linear Interpolate) between the noise-driven chaos and the static target
+                    posArr[i] = tx + noiseX;
+                    posArr[i+1] = ty + noiseY;
+                    posArr[i+2] = tz + noiseZ;
+                }
+                particleSystem.geometry.attributes.position.needsUpdate = true;
+                
+                // Rotate the whole scene slightly for depth
+                particleSystem.rotation.y = Math.sin(time * 0.1) * 0.1;
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        initThree();
+        animate();
+    </script>
+</body>
+</html>
         }
     </script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
