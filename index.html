@@ -3,37 +3,245 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Image Particle Exploder</title>
+    <title>High-Density Image Particles</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #050505; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: white; }
-        
-        /* UI Panels */
+        body { margin: 0; overflow: hidden; background-color: #050505; font-family: 'Segoe UI', sans-serif; color: white; }
         #ui-layer {
             position: absolute; top: 20px; left: 20px; width: 280px;
-            background: rgba(0, 0, 0, 0.85); padding: 20px; border-radius: 12px;
-            z-index: 100; border: 1px solid #333; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            background: rgba(0, 0, 0, 0.9); padding: 20px; border-radius: 12px;
+            z-index: 100; border: 1px solid #00ffcc; box-shadow: 0 0 20px rgba(0, 255, 204, 0.2);
         }
-        h2 { margin: 0 0 10px 0; font-size: 1.1rem; color: #00ffcc; text-transform: uppercase; letter-spacing: 1px; }
-        p { font-size: 0.85rem; color: #bbb; line-height: 1.4; margin-bottom: 15px; }
-
+        h2 { margin: 0 0 10px 0; font-size: 1.1rem; color: #00ffcc; text-transform: uppercase; }
         button#start-btn {
             width: 100%; padding: 12px; background: #00ffcc; border: none;
             border-radius: 6px; color: #000; font-weight: bold; cursor: pointer;
-            transition: transform 0.2s, background 0.2s; margin-bottom: 15px;
+            margin-bottom: 15px;
         }
-        button#start-btn:hover { background: #00e6b8; transform: translateY(-2px); }
-        
-        input[type="file"] { font-size: 0.8rem; color: #00ffcc; }
-
-        /* Camera & Hand Preview */
         #camera-container {
             position: absolute; bottom: 20px; left: 20px; width: 180px; height: 135px;
-            border: 2px solid #444; border-radius: 8px; overflow: hidden; background: #000;
+            border: 2px solid #00ffcc; border-radius: 8px; overflow: hidden;
         }
         #video-feed { width: 100%; height: 100%; transform: scaleX(-1); object-fit: cover; }
         #canvas-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); }
+        .hidden { display: none !important; }
+        .control-group { margin-bottom: 10px; font-size: 0.8rem; }
+        input[type="range"] { width: 100%; }
+    </style>
+    
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+</head>
+<body>
 
-        #status { margin-top: 15px; font-size: 0.75rem; font-family: monospace; color: #888; }
+    <div id="ui-layer">
+        <h2>Image Exploder</h2>
+        <button id="start-btn">1. START CAMERA</button>
+        
+        <div id="upload-section" class="hidden">
+            <p style="font-size: 0.8rem;">2. Upload Image (PNG/JPG)</p>
+            <input type="file" id="imageLoader" accept="image/*" style="margin-bottom:15px;">
+            
+            <div class="control-group">
+                <label>Particle Density (Requires Re-upload)</label>
+                <input type="range" id="densityRange" min="1" max="5" step="1" value="1">
+            </div>
+            <div class="control-group">
+                <label>Point Size (Gap Filler)</label>
+                <input type="range" id="sizeRange" min="0.05" max="0.5" step="0.01" value="0.2">
+            </div>
+        </div>
+
+        <div id="status" style="font-size: 0.7rem; color: #888; margin-top: 10px;">Waiting...</div>
+    </div>
+
+    <div id="camera-container" class="hidden">
+        <video id="video-feed" playsinline></video>
+        <canvas id="canvas-overlay"></canvas>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        let scene, camera, renderer, controls, particleSystem;
+        let handOpenFactor = 0, targetHandFactor = 0;
+        let lastImg = null;
+
+        const config = {
+            expansion: 35,
+            rotationSpeed: 0.2
+        };
+
+        function initThree() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 40;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        // --- IMAGE PROCESSING ---
+        document.getElementById('imageLoader').addEventListener('change', (e) => {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => { lastImg = img; processImage(img); };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(e.target.files[0]);
+        });
+
+        function processImage(img) {
+            if (particleSystem) scene.remove(particleSystem);
+
+            const density = parseInt(document.getElementById('densityRange').value);
+            const size = parseFloat(document.getElementById('sizeRange').value);
+
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // We allow higher resolution for "one piece" look
+            const maxDim = 200; 
+            const scale = Math.min(maxDim / img.width, maxDim / img.height);
+            canvas.width = img.width * scale;
+            canvas.height = img.height * scale;
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            
+            const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            const positions = [], colors = [], originals = [];
+
+            // Step through pixels based on density
+            // density 1 = every pixel, density 2 = every 2nd pixel
+            for (let y = 0; y < canvas.height; y += density) {
+                for (let x = 0; x < canvas.width; x += density) {
+                    const i = (y * canvas.width + x) * 4;
+                    if (data[i+3] > 100) { 
+                        const px = (x - canvas.width / 2) * 0.2;
+                        const py = (canvas.height / 2 - y) * 0.2;
+                        positions.push(px, py, 0);
+                        originals.push(px, py, 0);
+                        colors.push(data[i]/255, data[i+1]/255, data[i+2]/255);
+                    }
+                }
+            }
+
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            geo.setAttribute('origin', new THREE.Float32BufferAttribute(originals, 3));
+
+            const mat = new THREE.PointsMaterial({
+                size: size, 
+                vertexColors: true, 
+                transparent: true,
+                opacity: 0.9
+            });
+
+            particleSystem = new THREE.Points(geo, mat);
+            scene.add(particleSystem);
+            document.getElementById('status').innerText = `Particles: ${positions.length/3}`;
+        }
+
+        // --- HAND TRACKING ---
+        document.getElementById('start-btn').addEventListener('click', () => {
+            document.getElementById('start-btn').classList.add('hidden');
+            document.getElementById('upload-section').classList.remove('hidden');
+            document.getElementById('camera-container').classList.remove('hidden');
+            initHandTracking();
+        });
+
+        function initHandTracking() {
+            const video = document.getElementById('video-feed');
+            const canvas = document.getElementById('canvas-overlay');
+            const ctx = canvas.getContext('2d');
+
+            const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6 });
+
+            hands.onResults(results => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    const marks = results.multiHandLandmarks[0];
+                    drawConnectors(ctx, marks, HAND_CONNECTIONS, {color: '#00FFCC', lineWidth: 2});
+                    const d = Math.hypot(marks[4].x - marks[20].x, marks[4].y - marks[20].y);
+                    // 0.05 (Closed) to 0.3 (Open)
+                    handOpenFactor = THREE.MathUtils.smoothstep(d, 0.07, 0.28);
+                }
+            });
+
+            const cam = new Camera(video, {
+                onFrame: async () => { 
+                    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+                    await hands.send({image: video}); 
+                }
+            });
+            cam.start();
+        }
+
+        // Update particle size in real-time
+        document.getElementById('sizeRange').addEventListener('input', (e) => {
+            if (particleSystem) particleSystem.material.size = parseFloat(e.target.value);
+        });
+
+        // --- ANIMATION ---
+        function animate() {
+            requestAnimationFrame(animate);
+            targetHandFactor += (handOpenFactor - targetHandFactor) * 0.1;
+
+            if (particleSystem) {
+                const posArr = particleSystem.geometry.attributes.position.array;
+                const origArr = particleSystem.geometry.attributes.origin.array;
+                const time = Date.now() * 0.001;
+
+                for (let i = 0; i < posArr.length; i += 3) {
+                    const ox = origArr[i], oy = origArr[i+1];
+                    const angle = Math.atan2(oy, ox);
+                    
+                    // The "Home" state is exactly origArr.
+                    // The "Exploded" state is home + direction * expansion.
+                    const spread = targetHandFactor * config.expansion;
+                    
+                    // Add subtle wave only when expanding
+                    const wave = Math.sin(time + (ox+oy)*0.5) * targetHandFactor;
+
+                    posArr[i] = ox + (Math.cos(angle) * spread) + wave;
+                    posArr[i+1] = oy + (Math.sin(angle) * spread) + wave;
+                    posArr[i+2] = Math.sin(time * 2 + ox) * spread * 0.3;
+                }
+                particleSystem.geometry.attributes.position.needsUpdate = true;
+                // Slowly auto-rotate for 3D effect
+                particleSystem.rotation.y = Math.sin(time * 0.2) * 0.2;
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        initThree();
+        animate();
+    </script>
+</body>
+</html>
         .hidden { display: none !important; }
     </style>
     
