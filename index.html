@@ -6,17 +6,67 @@
     <title>Polacy Particles</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #050505; font-family: 'Segoe UI', sans-serif; }
-        #info {
-            position: absolute; top: 20px; left: 20px; color: white;
-            background: rgba(0, 0, 0, 0.8); padding: 15px; border-radius: 8px;
-            z-index: 100; border: 1px solid #444; pointer-events: none; /* Let clicks pass through to GUI */
+        
+        /* Modal Styles */
+        #modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: flex; justify-content: center; align-items: center;
+            z-index: 1000;
+            backdrop-filter: blur(5px);
+            transition: opacity 0.5s ease;
         }
+        
+        #modal-content {
+            background: linear-gradient(145deg, #1a1a1a, #050505);
+            padding: 40px;
+            border-radius: 16px;
+            border: 1px solid #333;
+            text-align: center;
+            color: white;
+            max-width: 400px;
+            box-shadow: 0 0 30px rgba(0, 255, 204, 0.1);
+        }
+
+        h1 { margin: 0 0 10px 0; font-weight: 300; letter-spacing: 2px; color: #00ffcc; }
+        
+        .instructions {
+            display: flex; justify-content: space-around; margin: 30px 0;
+            font-size: 0.9rem; color: #ccc;
+        }
+        
+        .instruction-item b { display: block; font-size: 1.5rem; margin-bottom: 5px; }
+
+        #start-btn {
+            background: transparent;
+            color: #00ffcc;
+            border: 1px solid #00ffcc;
+            padding: 10px 30px;
+            font-size: 1rem;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        #start-btn:hover {
+            background: #00ffcc;
+            color: #000;
+            box-shadow: 0 0 15px rgba(0, 255, 204, 0.5);
+        }
+
         #video-feed {
             position: absolute; bottom: 10px; left: 10px; width: 120px;
             transform: scaleX(-1); border-radius: 4px; opacity: 0.3; pointer-events: none;
+            z-index: 50;
         }
-        /* GUI Container override to make sure it's clickable */
-        .lil-gui { pointer-events: auto; }
+
+        /* Loading status in corner */
+        #status-indicator {
+            position: absolute; bottom: 10px; right: 10px;
+            color: #444; font-size: 12px; pointer-events: none;
+        }
     </style>
     
     <script type="importmap">
@@ -32,43 +82,61 @@
 </head>
 <body>
 
-    <div id="info">
-        <h2 style="margin:0; font-size:1.1rem;">Particle Chaos Control</h2>
-        <p style="font-size:0.8rem; color:#aaa; margin-top:5px;">
-            🖐️ <b>Open Hand:</b> Chaos / Explosion<br>
-            ✊ <b>Closed Fist:</b> Assemble Image
-        </p>
-        <div id="status" style="margin-top:10px; font-size:0.8rem; color:#00ffcc;">Initializing...</div>
+    <div id="modal-overlay">
+        <div id="modal-content">
+            <h1>PARTICLE CONTROL</h1>
+            <p style="color: #666; font-size: 0.8rem; margin-bottom: 20px;">INTERACTIVE HAND TRACKING</p>
+            
+            <div class="instructions">
+                <div class="instruction-item">
+                    <b>🖐️</b>
+                    Open Hand<br>
+                    <span style="font-size:0.7rem; color:#888;">EXPLODE</span>
+                </div>
+                <div class="instruction-item">
+                    <b>✊</b>
+                    Closed Fist<br>
+                    <span style="font-size:0.7rem; color:#888;">ASSEMBLE</span>
+                </div>
+            </div>
+
+            <button id="start-btn">Initialize System</button>
+        </div>
     </div>
 
+    <div id="status-indicator">System Standby</div>
     <video id="video-feed" playsinline></video>
 
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-        import GUI from 'three/addons/libs/lil-gui.module.min.js';
+
+        // GUI Removed as requested
 
         let scene, camera, renderer, controls, particleSystem;
-        let handOpenFactor = 1; // Default to chaos (1 = open, 0 = closed)
+        let handOpenFactor = 1; 
         let targetHandFactor = 1;
 
-        // Image Configuration
-        const imageConfig = {
-            currentImage: 'thePolacyLogo.png', // Default load
-            options: ['thePolacyLogo.png', '626.png']
-        };
-
+        // Configuration
         const config = {
+            imageFile: 'thePolacyLogo.png', // Hardcoded single image
             particleSize: 0.15,
-            chaosAmount: 30,    // How far particles scatter
-            chaosSpeed: 1.0,    // Speed of noise movement
-            returnSpeed: 0.08,  // How fast they snap back to image
-            sampleDensity: 2,   // 1 = High Detail, 4 = Low Detail (Performance)
+            chaosAmount: 30,    
+            returnSpeed: 0.08,  
+            sampleDensity: 2,   
             imageScale: 0.05
         };
 
+        // --- UI LOGIC ---
+        document.getElementById('start-btn').addEventListener('click', () => {
+            const modal = document.getElementById('modal-overlay');
+            modal.style.opacity = '0';
+            setTimeout(() => { modal.style.display = 'none'; }, 500);
+            
+            // Start audio context or other initializers if added later
+        });
+
         function init() {
-            // 1. Scene Setup
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
             camera.position.set(0, 0, 30);
@@ -79,25 +147,13 @@
 
             controls = new OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
-            controls.autoRotate = true;
-            controls.autoRotateSpeed = 1.0;
+            controls.enableRotate = true; 
+            controls.autoRotate = false; // DISABLED auto rotation
 
-            // 2. GUI Setup
-            const gui = new GUI();
-            gui.add(imageConfig, 'currentImage', imageConfig.options)
-               .name('Select Image')
-               .onChange(loadImage);
-            
-            const folder = gui.addFolder('Chaos Settings');
-            folder.add(config, 'chaosAmount', 5, 100);
-            folder.add(config, 'particleSize', 0.01, 0.5).onChange(updateMaterial);
-            
-            // 3. Start System
-            loadImage(imageConfig.currentImage);
+            loadImage(config.imageFile);
             initHandTracking();
             animate();
 
-            // Resize Handler
             window.addEventListener('resize', () => {
                 camera.aspect = window.innerWidth / window.innerHeight;
                 camera.updateProjectionMatrix();
@@ -105,22 +161,16 @@
             });
         }
 
-        function updateMaterial() {
-            if (particleSystem) particleSystem.material.size = config.particleSize;
-        }
-
-        // --- IMAGE PROCESSING ---
         function loadImage(filename) {
-            document.getElementById('status').innerText = `Loading ${filename}...`;
+            document.getElementById('status-indicator').innerText = "Loading assets...";
             
             const loader = new THREE.TextureLoader();
-            // Assumes images are in the same directory
             loader.load(`./${filename}`, (texture) => {
                 createParticles(texture.image);
             }, undefined, (err) => {
                 console.error(err);
-                document.getElementById('status').innerText = "Error: Run local server to load images!";
-                document.getElementById('status').style.color = "red";
+                document.getElementById('status-indicator').innerText = "Error loading image.";
+                document.getElementById('status-indicator').style.color = "red";
             });
         }
 
@@ -130,7 +180,6 @@
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             
-            // Resize for consistent particle count
             const maxDim = 200; 
             const scale = Math.min(maxDim / img.width, maxDim / img.height);
             canvas.width = img.width * scale;
@@ -142,7 +191,7 @@
             const positions = [];
             const colors = [];
             const originals = [];
-            const randoms = []; // Store random direction for chaos
+            const randoms = [];
 
             for (let y = 0; y < canvas.height; y += config.sampleDensity) {
                 for (let x = 0; x < canvas.width; x += config.sampleDensity) {
@@ -154,16 +203,15 @@
                         const g = imgData[index + 1] / 255;
                         const b = imgData[index + 2] / 255;
 
-                        // Target Position (The Image)
+                        // Center offsets
                         const tx = (x - canvas.width / 2) * config.imageScale;
-                        const ty = (canvas.height / 2 - y) * config.imageScale; // Flip Y
+                        const ty = (canvas.height / 2 - y) * config.imageScale; 
                         const tz = 0;
 
-                        positions.push(tx, ty, tz); // Start at target
+                        positions.push(tx, ty, tz); 
                         originals.push(tx, ty, tz);
                         colors.push(r, g, b);
 
-                        // Random Vector for Chaos State
                         const theta = Math.random() * Math.PI * 2;
                         const phi = Math.acos((Math.random() * 2) - 1);
                         const rx = Math.sin(phi) * Math.cos(theta);
@@ -191,10 +239,9 @@
 
             particleSystem = new THREE.Points(geometry, material);
             scene.add(particleSystem);
-            document.getElementById('status').innerText = `Active: ${filename}`;
+            document.getElementById('status-indicator').innerText = "System Active";
         }
 
-        // --- HAND TRACKING ---
         function initHandTracking() {
             const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
             hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6 });
@@ -202,19 +249,11 @@
             hands.onResults(results => {
                 if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                     const landmarks = results.multiHandLandmarks[0];
-                    
-                    // Logic: Distance between Thumb Tip (4) and Index Tip (8) or Pinky (20)
-                    // Using bounding box of hand to normalize helps, but simple distance is usually enough
-                    const p1 = landmarks[4]; // Thumb
-                    const p2 = landmarks[20]; // Pinky
+                    const p1 = landmarks[4]; 
+                    const p2 = landmarks[20]; 
                     const distance = Math.hypot(p1.x - p2.x, p1.y - p2.y);
-                    
-                    // Map Distance: < 0.1 (Closed) to > 0.3 (Open)
-                    // We want Closed = 0 (Image), Open = 1 (Chaos)
-                    const val = THREE.MathUtils.smoothstep(distance, 0.1, 0.35);
-                    handOpenFactor = val; // 0 = Closed, 1 = Open
+                    handOpenFactor = THREE.MathUtils.smoothstep(distance, 0.1, 0.35);
                 } else {
-                    // If no hand detected, drift towards chaos slowly
                     handOpenFactor = 1; 
                 }
             });
@@ -226,44 +265,37 @@
             cameraHelper.start();
         }
 
-        // --- ANIMATION LOOP ---
         function animate() {
             requestAnimationFrame(animate);
 
-            // Interpolate target value for smoothness
             targetHandFactor += (handOpenFactor - targetHandFactor) * config.returnSpeed;
 
             if (particleSystem) {
+                // --- FACE OBSERVER LOGIC ---
+                // We copy the camera's rotation to the particle system.
+                // This ensures the 2D plane of the image is always perpendicular to the view.
+                particleSystem.quaternion.copy(camera.quaternion);
+
                 const positions = particleSystem.geometry.attributes.position.array;
                 const originals = particleSystem.geometry.attributes.originalPos.array;
                 const randoms = particleSystem.geometry.attributes.randomDir.array;
                 const time = Date.now() * 0.001;
-
-                // Toggle AutoRotate based on state (Stop rotating when forming image for clarity)
-                controls.autoRotate = targetHandFactor > 0.5;
 
                 for (let i = 0; i < positions.length; i += 3) {
                     const ox = originals[i];
                     const oy = originals[i+1];
                     const oz = originals[i+2];
 
-                    // Chaos Calculation
-                    // We move from Original (ox) towards Random Direction (rx * amount)
                     const rx = randoms[i];
                     const ry = randoms[i+1];
                     const rz = randoms[i+2];
 
-                    // Add some sine wave movement to the chaos so it feels alive
                     const noise = Math.sin(time + i) * 0.5; 
                     
-                    // Current Chaos Offset
                     const chaosX = (rx * config.chaosAmount) + (rx * noise);
                     const chaosY = (ry * config.chaosAmount) + (ry * noise);
                     const chaosZ = (rz * config.chaosAmount) + (rz * noise);
 
-                    // LERP: 0 = Image, 1 = Chaos
-                    // We mix Original Position with Chaos Position based on targetHandFactor
-                    
                     positions[i] = THREE.MathUtils.lerp(ox, chaosX, targetHandFactor);
                     positions[i+1] = THREE.MathUtils.lerp(oy, chaosY, targetHandFactor);
                     positions[i+2] = THREE.MathUtils.lerp(oz, chaosZ, targetHandFactor);
